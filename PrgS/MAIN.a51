@@ -1,0 +1,488 @@
+;***************************************************************************************************
+;*** MAIN.a51											****
+;***************************************************************************************************
+; Main implementation file (XProgISP [AT89LP2052@20MHz/XBus@115200Bd]).
+
+
+
+NAME	Main
+
+
+$INCLUDE	(MAIN.inc)
+
+$INCLUDE	(..\AT\SYSTEM.inc)
+$INCLUDE	(..\AT\MEMORY.inc)
+$INCLUDE	(..\AT\TIMER.inc)
+$INCLUDE	(..\AT\CLOCK.inc)
+$INCLUDE	(..\AT\CALENDAR.inc)
+$INCLUDE	(..\AT\SERIAL.inc)
+$INCLUDE	(..\AT\XBUS.inc)
+$INCLUDE	(..\AT\XSLAVE.inc)
+$INCLUDE	(..\AT\I2C.inc)
+$INCLUDE	(..\AT\AT24C256.inc)
+
+
+
+MAIN_C		SEGMENT	CODE
+
+IF	MAIN_D_ADDR = 0
+MAIN_D		SEGMENT	DATA
+ENDIF	;MAIN_D_ADDR = 0
+
+IF	MAIN_B_ADDR = 0
+MAIN_B		SEGMENT	BIT
+ENDIF	;MAIN_B_ADDR = 0
+
+
+
+AD3202_CS		EQU	P3.7
+
+AD3202_START		EQU	(00000001b)
+AD3202_RDCH0		EQU	(10111111b)
+AD3202_RDCH1		EQU	(11111111b)
+AD3202_DUMMY		EQU	(11111111b)
+
+
+SPI_SS			EQU	P1.4
+SPI_MOSI		EQU	P1.5
+SPI_MISO		EQU	P1.6
+SPI_CLK			EQU	P1.7
+
+
+MAIN_SPIBufferO		EQU	0xb0
+MAIN_SPIBufferI		EQU	0xb8
+
+
+
+		PUBLIC	MAIN_Run
+
+		PUBLIC	MAIN_Value
+
+		PUBLIC	TIMER_OnTimer
+		PUBLIC	TIMER_OnTimer0
+		PUBLIC	TIMER_OnTimer1
+
+		PUBLIC	SERIAL_OnSPIRxComplete
+		PUBLIC	SERIAL_OnSPITxComplete
+
+		PUBLIC	XSLAVE_TABLE_ToAll
+		PUBLIC	XSLAVE_TABLE_ToMy
+
+
+;CSEG	AT	0x001b
+;		LJMP	INT_Timer1
+
+RSEG	MAIN_C
+
+
+USING	3
+USING	2
+USING	1
+USING	0
+
+
+MAIN_Run:
+		MOV	P1M0, #01000000b
+		MOV	P1M1, #10111111b
+		MOV	P3M0, #00000000b
+		MOV	P3M1, #00000000b
+		MOV	P1, #0x03
+		MOV	P3, #0xff
+
+		CALL	TIMER_Init
+		CALL	CLOCK_Init
+		CALL	CALENDAR_Init
+		CALL	SERIAL_Init
+		CALL	XBUS_Init
+		CALL	XSLAVE_Init
+		CALL	I2C_Init
+		CALL	SERIAL_TimerInit
+
+		MOV	SPI_Config, #00000011b
+
+		CLR	MAIN_SPIFlag_AD
+		CLR	MAIN_SPIFlag_SPI
+
+		MOV	MAIN_AT24C256_Addr + 0, #0
+		MOV	MAIN_AT24C256_Addr + 1, #0
+
+;		SETB	SPI_SS
+;		SETB	AD3202_CS
+
+;		CALL	SPI_Enable
+
+;		MOV	MAIN_CntDelay + 0, #0xa0
+;		MOV	MAIN_CntDelay + 1, #0x86
+;		MOV	MAIN_CntDelay + 2, #0x01
+;		MOV	MAIN_CntDelay + 3, #0x00
+
+;		CLR	MAIN_Flag_CntMeasure
+		SETB	EA
+
+;		CALL	MAIN_CntMeasure
+
+;		SETB	F1
+;		MOV	R2, #8
+;		CALL	MAIN_AT24C256_RWData
+/*
+		MOV	XBUS_NodeID, #XSLAVE_DefaultNodeID
+		MOV	XBUS_Header + 0, #0xff		
+		MOV	XBUS_Header + 1, #0x00		
+		MOV	XBUS_Header + 2, #0x08		
+		MOV	XBUS_Header + 3, #01001111b		
+/*		MOV	XBUS_Header + 0, #0xff		
+		MOV	XBUS_Header + 1, #0x00		
+		MOV	XBUS_Header + 2, #0x0d		
+;		MOV	XBUS_Header + 3, #10001011b		
+		MOV	XBUS_Header + 3, #01001011b		
+*/		
+
+MAIN_Run_loop:
+		CALL	XSLAVE_Run
+		JMP	MAIN_Run_loop
+
+
+TIMER_OnTimer:
+;		JNB	MAIN_Flag_CntMeasure, TIMER_OnTimer_end
+
+TIMER_OnTimer_end:
+		RET
+
+MAIN_StartAD0:
+		MOV	A, #AD3202_RDCH0
+		JMP	MAIN_StartAD
+MAIN_StartAD1:
+		MOV	A, #AD3202_RDCH1
+MAIN_StartAD:
+		MOV	SERIAL_SPI_TCounter, #3
+		MOV	SERIAL_SPI_RCounter, #3
+		MOV	SERIAL_SPI_TPointer, #MAIN_SPIBufferO + 0
+		MOV	SERIAL_SPI_RPointer, #MAIN_SPIBufferI + 0
+		MOV	R1, #MAIN_SPIBufferO + 0
+		MOV	@R1, #AD3202_START
+		INC	R1
+		MOV	@R1, A
+		INC	R1
+		MOV	@R1, #AD3202_DUMMY
+		CLR	AD3202_CS
+		SETB	MAIN_SPIFlag_AD
+		JMP	SERIAL_SPI_TxData
+
+
+TIMER_OnTimer0:
+		CALL	SERIAL_OnTimer
+		CALL	XBUS_OnTimer
+TIMER_OnTimer0_end:
+		RET
+
+TIMER_OnTimer1:
+		CALL	CLOCK_On10ms
+TIMER_OnTimer1_end:
+		RET
+
+SPI_Enable:
+		MOV	A, SPI_Config
+		ANL	A, #00101111b
+		ORL	A, #SERIAL_SPI_SPCR
+		MOV	SPCR, A
+		MOV	SPSR, #SERIAL_SPI_SPSR
+		SETB	SERIAL_SPI_Enabled
+		ORL	SPI_Config, #0x80
+		RET
+
+SPI_Disable:
+		CLR	SERIAL_SPI_Enabled
+		MOV	SPCR, #0x00
+		MOV	P1M0, #01000000b
+		MOV	P1M1, #10111111b
+		ANL	SPI_Config, #0x7f
+		RET
+
+SERIAL_OnSPIRxComplete:
+		JB	MAIN_SPIFlag_AD, SPI_OnAD
+		JB	MAIN_SPIFlag_SPI, SPI_OnSPI
+SERIAL_OnSPIRxComplete_end:
+		RET
+SERIAL_OnSPITxComplete:
+SERIAL_OnSPITxComplete_end:
+		RET
+
+SPI_OnSPI:
+		JB	SPI_NoStop, SPI_OnSPI_NoStop
+		SETB	SPI_SS
+SPI_OnSPI_NoStop:
+		CLR	MAIN_SPIFlag_SPI
+		RET
+
+SPI_OnAD:
+		SETB	AD3202_CS
+		CLR	MAIN_SPIFlag_AD
+		RET
+
+MAIN_SelfTest:
+		RET
+
+MAIN_RWP1:
+		JNB	F0, MAIN_RWP1_Write
+		MOV	A, P1
+		MOV	@R1, A
+		RET
+MAIN_RWP1_Write:
+		JNB	F1, MAIN_RWP1_end
+		MOV	A, @R0
+		MOV	P1, A
+MAIN_RWP1_end:
+		RET
+
+MAIN_RWP3:
+		JNB	F0, MAIN_RWP3_Write
+		MOV	A, P3
+		MOV	@R1, A
+		RET
+MAIN_RWP3_Write:
+		JNB	F1, MAIN_RWP3_end
+		MOV	A, @R0
+		MOV	P3, A
+MAIN_RWP3_end:
+		RET
+
+SPI_RWConfig:
+		JNB	F0, SPI_RWConfig_Write
+		MOV	@R1, SPI_Config
+		RET
+SPI_RWConfig_Write:
+		JNB	F1, SPI_RWConfig_end
+		MOV	A, @R0
+		MOV	SPI_Config, A
+		JNB	ACC.7, SPI_RWConfig_Disable
+		CALL	SPI_Enable
+		JMP	SPI_RWConfig_end
+SPI_RWConfig_Disable:
+		CALL	SPI_Disable
+SPI_RWConfig_end:
+		RET
+
+SPI_RWDataNoStop:
+		SETB	SPI_NoStop
+		JMP	SPI_RWData
+SPI_RWDataStop:
+		CLR	SPI_NoStop
+SPI_RWData:
+		JNB	F0, SPI_RWData_Write
+		MOV	B, R2
+		MOV	R0, #MAIN_SPIBufferI
+		CALL	MEMORY_MemCpy_I2I
+		MOV	R2, B
+		RET
+SPI_RWData_Write:
+		JNB	F1, SPI_RWData_end
+		MOV	B, R2
+		MOV	R1, #MAIN_SPIBufferO
+		CALL	MEMORY_MemCpy_I2I
+		MOV	R2, B
+		MOV	SERIAL_SPI_TCounter, B
+		MOV	SERIAL_SPI_RCounter, B
+		MOV	SERIAL_SPI_TPointer, #MAIN_SPIBufferO
+		MOV	SERIAL_SPI_RPointer, #MAIN_SPIBufferI
+		CLR	SPI_SS
+		SETB	MAIN_SPIFlag_SPI
+		JMP	SERIAL_SPI_TxData
+SPI_RWData_end:
+		RET
+
+MAIN_ReadAD0:
+		JNB	F0, MAIN_ReadAD_end
+		MOV	B, R1
+		CALL	MAIN_StartAD0
+		JMP	MAIN_ReadAD
+MAIN_ReadAD1:
+		JNB	F0, MAIN_ReadAD_end
+		MOV	B, R1
+		CALL	MAIN_StartAD1
+MAIN_ReadAD:
+		JNB	MAIN_SPIFlag_AD, $+0
+		MOV	R0, #MAIN_SPIBufferI + 1
+		MOV	R1, B
+		MOV	A, @R0
+		ANL	A, #0x0f
+		INC	R0
+		MOV	@R1, A
+		INC	R1
+		MOV	A, @R0
+		MOV	@R1, A
+MAIN_ReadAD_end:
+		RET
+
+MAIN_AT24C256_RWData:
+		MOV	A, R2
+		MOV	R4, A
+		MOV	DPL, MAIN_AT24C256_Addr + 0
+		MOV	DPH, MAIN_AT24C256_Addr + 1
+		JNB	F0, MAIN_AT24C256_RWData_Write
+		CALL	AT24C256_ReadBytes
+		JMP	MAIN_AT24C256_RWData_end
+MAIN_AT24C256_RWData_Write:
+		JNB	F1, MAIN_AT24C256_RWData_end
+		CALL	AT24C256_WriteBytes
+MAIN_AT24C256_RWData_end:
+		MOV	A, R4
+		ADD	A, DPL
+		MOV	MAIN_AT24C256_Addr + 0, A
+		CLR	A
+		ADDC	A, DPH
+		MOV	MAIN_AT24C256_Addr + 1, A
+		RET
+/*
+MAIN_CntMeasure:		
+		CLR	A
+		XCH	A, IE
+		MOV	B, A
+		CLR	TR1
+
+		ANL	TMOD, #00001111b
+		ORL	TMOD, #01010000b
+
+		CLR	A
+		MOV	TL1, A
+		MOV	TH1, A
+		MOV	RL1, A
+		MOV	RH1, A
+		MOV	MAIN_CntValue + 0, A
+		MOV	MAIN_CntValue + 1, A
+		SETB	EA
+		SETB	ET1
+		CLR	TF1
+		SETB	TR1
+		
+		MOV	R7, MAIN_CntDelay + 0
+		MOV	R6, MAIN_CntDelay + 1
+		MOV	R5, MAIN_CntDelay + 2
+		MOV	R4, MAIN_CntDelay + 3
+		INC	R7
+		INC	R6
+		INC	R5
+		INC	R4
+MAIN_CntMeasure_loop:
+		DJNZ	R7, MAIN_CntMeasure_loop
+		DJNZ	R6, MAIN_CntMeasure_loop
+		DJNZ	R5, MAIN_CntMeasure_loop
+		DJNZ	R4, MAIN_CntMeasure_loop
+
+		CLR	TR1
+
+		MOV	@R1, TL1
+		INC	R1
+		MOV	@R1, TH1
+		INC	R1
+		MOV	@R1, MAIN_CntValue + 0
+		INC	R1
+		MOV	@R1, MAIN_CntValue + 1
+
+		CALL	SERIAL_TimerInit
+		MOV	IE, B
+
+MAIN_CntMeasure_end:
+		RET
+
+INT_Timer1:
+		INC	MAIN_CntValue + 0
+		MOV	A, MAIN_CntValue + 0
+		JNZ	INT_Timer1_end
+		INC	MAIN_CntValue + 1
+INT_Timer1_end:
+		RETI
+*/
+
+XSLAVE_TABLE_BEGIN	ToAll
+XSLAVE_TABLE_END	ToAll
+
+XSLAVE_TABLE_BEGIN	ToMy
+	XSLAVE_ENTRY_F		0x0000, 0, SYSTEM_Reset
+	XSLAVE_ENTRY_F		0x0001, 0, SYSTEM_WarmReset
+	XSLAVE_ENTRY_F		0x0002, 0, SYSTEM_ColdReset
+	XSLAVE_ENTRY_F		0x0003, 0, MAIN_SelfTest
+	XSLAVE_ENTRY_FRW	0x0005, 1, MAIN_RWP1
+	XSLAVE_ENTRY_FRW	0x0007, 1, MAIN_RWP3
+	XSLAVE_ENTRY_CR		0x0008, 8, XSLAVE_ModuleName
+	XSLAVE_ENTRY_CR		0x0009, 8, MAIN_SerialNumber
+	XSLAVE_ENTRY_CR		0x000A, 8, MAIN_VersionSupport
+	XSLAVE_ENTRY_FRW	0x000B, 1, SPI_RWConfig
+	XSLAVE_ENTRY_FRW	0x000C, 8, SPI_RWDataStop
+	XSLAVE_ENTRY_FRW	0x000D, 8, SPI_RWDataNoStop
+	XSLAVE_ENTRY_IRW	0x0011, 4, CLOCK_Time
+	XSLAVE_ENTRY_IRW	0x0021, 4, CALENDAR_Date
+	XSLAVE_ENTRY_IRW	0x0101, 2, MAIN_AT24C256_Addr
+	XSLAVE_ENTRY_FRW	0x0102, 8, MAIN_AT24C256_RWData
+	XSLAVE_ENTRY_FR		0x5000, 2, MAIN_ReadAD0
+	XSLAVE_ENTRY_FR		0x5001, 2, MAIN_ReadAD1
+;	XSLAVE_ENTRY_IRW	0xA001, 4, MAIN_CntDelay
+;	XSLAVE_ENTRY_FR		0xA002, 4, MAIN_CntMeasure
+XSLAVE_TABLE_END	ToMy
+
+
+XSLAVE_ModuleName:
+		XSLAVE_ModuleNameString
+
+
+MAIN_SerialNumber:
+		DB	'00000001'
+
+MAIN_VersionSupport:
+		DB	MAIN_VersionMajor
+		DB	MAIN_VersionMinor
+		DW	MAIN_VersionBuild
+		DW	MAIN_SupportL
+		DW	MAIN_SupportH
+
+
+IF	MAIN_D_ADDR = 0
+RSEG	MAIN_D
+ELSE	;MAIN_D_ADDR = 0
+DSEG	AT	MAIN_D_ADDR
+MAIN_D:
+ENDIF	;MAIN_D_ADDR = 0
+
+MAIN_Value:
+		DS	1
+SPI_Config:
+		DS	1
+MAIN_AT24C256_Addr:
+		DS	2
+
+;MAIN_CntDelay:
+;		DS	4
+;MAIN_CntValue:
+;		DS	2
+
+
+IF	MAIN_B_ADDR = 0
+RSEG	MAIN_B
+ELSE	;MAIN_B_ADDR = 0
+BSEG	AT	MAIN_B_ADDR
+MAIN_B:
+ENDIF	;MAIN_B_ADDR = 0
+
+MAIN_SPIFlag_SPI:
+		DBIT	1
+MAIN_SPIFlag_AD:
+		DBIT	1
+SPI_NoStop:
+		DBIT	1
+
+;MAIN_Flag_CntMeasure:
+;		DBIT	1
+
+/*
+Pin	Alt	ISPFunc	SPIOnMode	SPIOffMode
+P1.0	AI0		01-PushPull	01-PushPull
+P1.1	AI1		01-PushPull	01-PushPull
+P1.2		VCC	01-PushPull	01-PushPull
+P1.3		Reset	01-PushPull	01-PushPull
+P1.4	CS	CS	01-PushPull	01-PushPull
+P1.5	MOSI	SDO	SPI		01-PushPull
+P1.6	MISO	SDI	SPI		10-Input
+P1.7	SCK	SCK	SPI		01-PushPull
+*/
+
+END
+
